@@ -1,7 +1,7 @@
-import fs from "fs";
 import { createRequire } from "module";
-import path from "path";
-import vm from "vm";
+import fs from "node:fs";
+import path from "node:path";
+import vm from "node:vm";
 
 import ini from "ini";
 import ts from "typescript";
@@ -12,9 +12,7 @@ import { z } from "zod/mini";
 import Dotenv, { PathError } from "./dotenv";
 import { createEnvAccessor, env as defaultEnvAccessor, EnvAccessor } from "./env";
 
-/** ────────────────────────────────────────────────────────────────────────────
- * Types & Public API
- * ──────────────────────────────────────────────────────────────────────────── */
+// Types & Public API
 export type ConfigFormat = "json" | "yaml" | "ini" | "ts";
 
 export interface FileSource {
@@ -66,9 +64,7 @@ export interface ConfigResult<T> {
   env: EnvAccessor<string>;
 }
 
-/** ────────────────────────────────────────────────────────────────────────────
- * Errors
- * ──────────────────────────────────────────────────────────────────────────── */
+// Errors
 export class ConfigError extends Error {
   constructor(message: string) {
     super(message);
@@ -102,9 +98,7 @@ export class ConfigValidationError extends ConfigError {
   }
 }
 
-/** ────────────────────────────────────────────────────────────────────────────
- * Optimized constants / helpers (hoisted to avoid rework on hot paths)
- * ──────────────────────────────────────────────────────────────────────────── */
+// Optimized constants / helpers (hoisted to avoid rework on hot paths)
 const ENV_PLACEHOLDER_REGEX = /%env\(([A-Z0-9_]+)\)%/gi;
 
 const TS_COMPILER_OPTS: ts.TranspileOptions = {
@@ -154,9 +148,7 @@ function fastSplitCommaSet(raw: string | undefined): string[] {
   return out;
 }
 
-/** ────────────────────────────────────────────────────────────────────────────
- * Public entry
- * ──────────────────────────────────────────────────────────────────────────── */
+// Public entry
 export function loadConfig<T extends ZodType>(options: LoadConfigOptions<T>): ConfigResult<z.infer<T>> {
   const schema = options.schema;
   if (!schema) throw new ConfigError("A Zod schema is required to load configuration.");
@@ -195,9 +187,7 @@ export function loadConfig<T extends ZodType>(options: LoadConfigOptions<T>): Co
   return { config: validation.data, env: envAccessor };
 }
 
-/** ────────────────────────────────────────────────────────────────────────────
- * Env handling
- * ──────────────────────────────────────────────────────────────────────────── */
+// Env handling
 function normalizeSources(sources?: ConfigSource | ConfigSource[]): ConfigSource[] {
   return !sources ? [] : Array.isArray(sources) ? sources : [sources];
 }
@@ -264,9 +254,7 @@ function extractLoadedEnvKeys(): string[] {
   return fastSplitCommaSet(raw);
 }
 
-/** ────────────────────────────────────────────────────────────────────────────
- * Source resolution & parsing
- * ──────────────────────────────────────────────────────────────────────────── */
+// Source resolution & parsing
 function resolveSource(
   source: ConfigSource,
   cwd: string,
@@ -324,9 +312,7 @@ function inferFormat(filepath: string): ConfigFormat {
   return ext;
 }
 
-/** ────────────────────────────────────────────────────────────────────────────
- * TypeScript module loading (no disk re-read, uses provided source)
- * ──────────────────────────────────────────────────────────────────────────── */
+// TypeScript module loading (no disk re-read, uses provided source)
 function loadTsModule(filepath: string, code: string, accessor: EnvAccessor<string>): unknown {
   const opts = { ...TS_COMPILER_OPTS, fileName: filepath };
   const transpiled = ts.transpileModule(code, opts);
@@ -355,10 +341,7 @@ function loadTsModule(filepath: string, code: string, accessor: EnvAccessor<stri
   return typeof exported === "function" ? exported({ env: accessor }) : exported;
 }
 
-/** ────────────────────────────────────────────────────────────────────────────
- * Value shaping
- * ──────────────────────────────────────────────────────────────────────────── */
-
+// Value shaping
 // Relaxed: accept any object-like (not null, not array). We clone own props anyway.
 function ensureObject(value: unknown, origin: string): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -433,9 +416,7 @@ function cloneValue<T>(value: T): T {
   return value;
 }
 
-/** ────────────────────────────────────────────────────────────────────────────
- * Narrowing helpers
- * ──────────────────────────────────────────────────────────────────────────── */
+// Narrowing helpers
 function isFileSource(value: ConfigSource): value is FileSource {
   return typeof value === "object" && value !== null && "path" in value && typeof (value as any).path === "string";
 }

@@ -177,6 +177,18 @@ The `env()` helper throws when the variable is missing. Provide a default with `
 
 Local files always win over base files. The loaded keys are registered on the shared `env` accessor so they show up in editor autocomplete once your editor reloads types.
 
+### Command expansion opt-in
+
+Command substitution via `$(...)` is now opt-in for `.env` files. By default these sequences are kept as literal strings. To re-enable shell execution, add a directive comment at the top of the file:
+
+```dotenv
+# @dotenv-expand-commands
+SECRET_KEY=$(openssl rand -hex 32)
+```
+
+Once the tag is present, all subsequent entries can use command expansion; omitting it keeps parsing side-effect free.
+If a command exits with a non-zero status or otherwise fails, the parser now keeps the original `$(...)` literal so `.env` loading continues without interruption.
+
 ## Contributors
 
 <a href="https://github.com/devscast/config-ts/graphs/contributors" title="show all contributors">

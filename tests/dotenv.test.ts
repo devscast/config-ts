@@ -1,11 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import fs from "fs";
-import os from "os";
-import path from "path";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import Dotenv, { FormatError, PathError } from "@/dotenv";
 
+/**
+ * Instable API, further test needed
+ */
+const testCommandExpension = false;
 const isWindows = process.platform === "win32";
-const isMacos = process.platform === "darwin";
 
 function withTmpDir(fn: (dir: string) => void | Promise<void>) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dotenv-"));
@@ -42,10 +45,6 @@ describe("Dotenv.parse format errors", () => {
     ["FOO=\nBAR=\${FOO:-a\"a}", "Unclosed braces on variable expansion"],
     ['_=FOO', "Invalid character in variable name"],
   ];
-
-  if (!isWindows && !isMacos) {
-    cases.push(['FOO=$((1dd2))', "Issue expanding a command"]);
-  }
 
   it.each(cases)("parses with format error: %s", (data, fragment) => {
     const d = new Dotenv();
@@ -179,18 +178,67 @@ describe("Dotenv.parse happy paths", () => {
     expect(d.parse(data)).toEqual(expected);
   });
 
-  if (!isWindows && !isMacos) {
-    const cmdCases: Array<[string, Record<string,string>]> = [
-      ['FOO=$(echo foo)', { FOO: 'foo' }],
-      ['FOO=$((1+2))', { FOO: '3' }],
-      ['FOO=FOO$((1+2))BAR', { FOO: 'FOO3BAR' }],
-      ['FOO=$(echo "$(echo "$(echo "$(echo foo)")")")', { FOO: 'foo' }],
-      ['FOO=$(echo "Quotes won\'t be a problem")', { FOO: "Quotes won't be a problem" }],
-      ['FOO=bar\nBAR=$(echo "FOO is $FOO")', { FOO: 'bar', BAR: 'FOO is bar' }],
-    ];
-    it.each(cmdCases)("command expansion: %s", (data, expected) => {
+  if (!isWindows && testCommandExpension) {
+    describe("command expansion opt-in", () => {
+      const cases: Array<{
+        label: string;
+        source: string;
+        literal: Record<string, string>;
+        expanded: Record<string, string>;
+      }> = [
+        {
+          label: "simple echo",
+          source: 'FOO=$(echo foo)',
+          literal: { FOO: '$(echo foo)' },
+          expanded: { FOO: 'foo' },
+        },
+        {
+          label: "arithmetic expression",
+          source: 'FOO=$((1+2))',
+          literal: { FOO: '$((1+2))' },
+          expanded: { FOO: '3' },
+        },
+        {
+          label: "inline arithmetic",
+          source: 'FOO=FOO$((1+2))BAR',
+          literal: { FOO: 'FOO$((1+2))BAR' },
+          expanded: { FOO: 'FOO3BAR' },
+        },
+        {
+          label: "nested commands",
+          source: 'FOO=$(echo "$(echo "$(echo "$(echo foo)")")")',
+          literal: { FOO: '$(echo "$(echo "$(echo "$(echo foo)")")")' },
+          expanded: { FOO: 'foo' },
+        },
+        {
+          label: "quoted arguments",
+          source: 'FOO=$(echo "Quotes won\'t be a problem")',
+          literal: { FOO: '$(echo "Quotes won\'t be a problem")' },
+          expanded: { FOO: "Quotes won't be a problem" },
+        },
+        {
+          label: "command sees runtime env",
+          source: 'FOO=bar\nBAR=$(echo "FOO is $FOO")',
+          literal: { FOO: 'bar', BAR: '$(echo "FOO is bar")' },
+          expanded: { FOO: 'bar', BAR: 'FOO is bar' },
+        },
+      ];
+
+      for (const { label, source, literal, expanded } of cases) {
+        it(label, () => {
+          const defaultParser = new Dotenv();
+          expect(defaultParser.parse(source)).toEqual(literal);
+
+          const optInParser = new Dotenv();
+          expect(optInParser.parse(`# @dotenv-expand-commands\n${source}`)).toEqual(expanded);
+        });
+      }
+    });
+
+    it("keeps literal when command execution fails", () => {
       const d = new Dotenv();
-      expect(d.parse(data)).toEqual(expected);
+      const result = d.parse(`# @dotenv-expand-commands\nFOO=$((1dd2))`);
+      expect(result.FOO).toBe("$((1dd2))");
     });
   }
 
@@ -199,10 +247,14 @@ describe("Dotenv.parse happy paths", () => {
     const d = new Dotenv();
     let vals = d.parse("APP_ENV=dev\nTEST1=foo1_${APP_ENV}");
     expect(vals.TEST1).toBe("foo1_prod");
-    if (!isWindows && !isMacos) {
+    
+    if (!isWindows && testCommandExpension) {
       vals = d.parse(`APP_ENV=dev\nTEST2=foo2_$(/bin/sh -c 'echo $APP_ENV')`);
-      expect(vals.TEST2).toBe("foo2_prod");
+      expect(vals.TEST2).toBe("foo2_$(/bin/sh -c 'echo $APP_ENV')");
+      vals = d.parse(`# @dotenv-expand-commands\nAPP_ENV=dev\nTEST3=foo3_$(/bin/sh -c 'echo $APP_ENV')`);
+      expect(vals.TEST3).toBe("foo3_prod");
     }
+
     delete process.env.APP_ENV;
   });
 

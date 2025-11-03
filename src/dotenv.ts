@@ -2,9 +2,7 @@ import { spawnSync } from "child_process";
 import fs from "fs";
 import path from "path";
 
-/** ────────────────────────────────────────────────────────────────────────────
- *  Hoisted regex & small helpers (avoid recompiles in hot paths)
- *  ──────────────────────────────────────────────────────────────────────────── */
+// Hoisted regex & small helpers (avoid recompiles in hot paths)
 const RX_VARNAME_STICKY = /_?[A-Z][A-Z0-9_]*/y; // sticky var name
 const RX_EXPORT_STICKY = /export[ \t]*/y; // sticky export
 const RX_EOL_OR_COMMENT = /[ \t]*(?:#.*)?$/my; // value: end or #...
@@ -12,6 +10,7 @@ const RX_DOUBLE_QUOTE_ESCAPES = /\\"/g; // \" -> "
 const RX_CRLF = /\r\n/g; // normalize EOL
 const RX_TRAILING_WS = /[ \t]+$/g; // trim end ws
 const RX_TRAILING_NEWLINES = /[\n\r]+$/g; // trim end \n
+const RX_COMMAND_DIRECTIVE = /(?:^|\s)@dotenv-expand-commands(?:\s|$)/i;
 const SENTINEL_VARS = "NODE_DOTENV_VARS";
 const SENTINEL_PATH = "NODE_DOTENV_PATH";
 
@@ -21,9 +20,7 @@ function countBackslashesLocal(s: string, index: number): number {
   return c;
 }
 
-/** ────────────────────────────────────────────────────────────────────────────
- *  Errors
- *  ──────────────────────────────────────────────────────────────────────────── */
+// Errors
 export class FormatError extends Error {
   constructor(
     message: string,
@@ -43,14 +40,8 @@ export class PathError extends Error {
   }
 }
 
-/** ────────────────────────────────────────────────────────────────────────────
- *  Types
- *  ──────────────────────────────────────────────────────────────────────────── */
 type StringMap = Record<string, string>;
 
-/** ────────────────────────────────────────────────────────────────────────────
- *  Dotenv
- *  ──────────────────────────────────────────────────────────────────────────── */
 export default class Dotenv {
   // public constant for external validation
   static readonly VARNAME_REGEX = /^_?[A-Z][A-Z0-9_]*$/i;
@@ -64,7 +55,7 @@ export default class Dotenv {
   private end_!: number;
   private values: StringMap = {};
   private prodEnvs: string[] = ["prod"];
-  private usePutenv = false; // parity flag only
+  private commandExpansionEnabled = false;
 
   constructor(
     private envKey = "APP_ENV",
@@ -73,11 +64,6 @@ export default class Dotenv {
 
   setProdEnvs(prodEnvs: string[]) {
     this.prodEnvs = [...prodEnvs];
-    return this;
-  }
-
-  useProcessPutenv(use = true) {
-    this.usePutenv = use; // no-op in Node, kept for parity/tests
     return this;
   }
 
@@ -197,6 +183,7 @@ export default class Dotenv {
     this.end_ = this.data_.length;
     let state = Dotenv.STATE_VARNAME;
     this.values = {};
+    this.commandExpansionEnabled = false;
     let name = "";
 
     this.skipEmptyLines();
@@ -228,7 +215,7 @@ export default class Dotenv {
     }
   }
 
-  /** ── Lexing & parsing internals ─────────────────────────────────────────── */
+  // Lexing & parsing internals
 
   private lexVarname(): string {
     // optional "export"
@@ -401,17 +388,28 @@ export default class Dotenv {
         continue;
       }
       if (ch === "#") {
+        const start = this.cursor + 1;
+        this.cursor++;
         while (this.cursor < this.end_ && this.data_[this.cursor] !== "\n") {
           this.cursor++;
         }
+        const comment = this.data_.slice(start, this.cursor).trim();
+        this.processDirective(comment);
         continue;
       }
       break;
     }
   }
 
+  private processDirective(comment: string) {
+    if (!comment) return;
+    if (RX_COMMAND_DIRECTIVE.test(comment)) {
+      this.commandExpansionEnabled = true;
+    }
+  }
+
   private resolveCommands(value: string, loadedVars: Set<string>): string {
-    if (!value.includes("$(")) return value;
+    if (!this.commandExpansionEnabled || !value.includes("$(")) return value;
 
     let out = "";
     let cursor = 0;
@@ -434,7 +432,18 @@ export default class Dotenv {
 
       out += value.slice(cursor, start);
       const { content, endIndex } = this.extractCommand(value, start + 2);
-      out += this.executeCommand(content, loadedVars);
+      const original = value.slice(start, endIndex + 1);
+      let replacement: string;
+      try {
+        replacement = this.executeCommand(content, loadedVars);
+      } catch (error) {
+        if (error instanceof FormatError) {
+          replacement = original;
+        } else {
+          throw error;
+        }
+      }
+      out += replacement;
       cursor = endIndex + 1;
     }
 
@@ -574,7 +583,7 @@ export default class Dotenv {
     return null;
   }
 
-  /** ── I/O helpers ────────────────────────────────────────────────────────── */
+  // I/O helpers
 
   private doLoad(overrideExisting: boolean, paths: string[]) {
     for (const p of paths) {
@@ -613,9 +622,7 @@ export default class Dotenv {
   }
 }
 
-/** ────────────────────────────────────────────────────────────────────────────
- *  Small util fns (sync, race-safe, low syscalls)
- *  ──────────────────────────────────────────────────────────────────────────── */
+// Small util fns (sync, race-safe, low syscalls)
 function tryReadFile(p: string): Buffer | null {
   try {
     return fs.readFileSync(p);

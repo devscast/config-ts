@@ -5,6 +5,7 @@ import path from "path";
 import Dotenv, { FormatError, PathError } from "@/dotenv";
 
 const isWindows = process.platform === "win32";
+const isMacos = process.platform === "darwin";
 
 function withTmpDir(fn: (dir: string) => void | Promise<void>) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dotenv-"));
@@ -42,7 +43,7 @@ describe("Dotenv.parse format errors", () => {
     ['_=FOO', "Invalid character in variable name"],
   ];
 
-  if (!isWindows) {
+  if (!isWindows && !isMacos) {
     cases.push(['FOO=$((1dd2))', "Issue expanding a command"]);
   }
 
@@ -178,7 +179,7 @@ describe("Dotenv.parse happy paths", () => {
     expect(d.parse(data)).toEqual(expected);
   });
 
-  if (!isWindows) {
+  if (!isWindows && !isMacos) {
     const cmdCases: Array<[string, Record<string,string>]> = [
       ['FOO=$(echo foo)', { FOO: 'foo' }],
       ['FOO=$((1+2))', { FOO: '3' }],
@@ -198,7 +199,7 @@ describe("Dotenv.parse happy paths", () => {
     const d = new Dotenv();
     let vals = d.parse("APP_ENV=dev\nTEST1=foo1_${APP_ENV}");
     expect(vals.TEST1).toBe("foo1_prod");
-    if (!isWindows) {
+    if (!isWindows && !isMacos) {
       vals = d.parse(`APP_ENV=dev\nTEST2=foo2_$(/bin/sh -c 'echo $APP_ENV')`);
       expect(vals.TEST2).toBe("foo2_prod");
     }

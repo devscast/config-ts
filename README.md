@@ -54,7 +54,7 @@ const { config, env } = loadConfig({
   env: { path: path.join(process.cwd(), ".env") },
   sources: [
     path.join("config", "default.yaml"),
-    { path: path.join("config", `${env("APP_ENV", { default: "dev" })}.yaml`), optional: true },
+    { path: path.join("config", `${env("NODE_ENV", { default: "dev" })}.yaml`), optional: true },
     { featureFlags: ["beta-search"] },
   ],
 });
@@ -94,7 +94,7 @@ const { config, env } = loadConfig({
   schema,
   env: {
     path: ".env",
-    knownKeys: ["APP_ENV", "DB_HOST", "DB_PORT"] as const,
+    knownKeys: ["NODE_ENV", "DB_HOST", "DB_PORT"] as const,
   },
 });
 
@@ -118,10 +118,10 @@ const schema = z.object({
   redisUrl: z.string().url(),
 });
 
-const env = createEnvAccessor(["APP_ENV", "APP_PORT", "REDIS_URL"] as const);
+const env = createEnvAccessor(["NODE_ENV", "APP_PORT", "REDIS_URL"] as const);
 
 const config = schema.parse({
-  appEnv: env("APP_ENV", { default: "dev" }),
+  appEnv: env("NODE_ENV", { default: "dev" }),
   port: Number(env("APP_PORT", { default: "3000" })),
   redisUrl: env("REDIS_URL"),
 });
@@ -161,6 +161,9 @@ const { config } = loadConfig({
 ### Referencing environment variables
 
 - **Text-based configs** (JSON, YAML, INI): use `%env(DB_HOST)%`
+- **Typed placeholders**: `%env(number:PORT)%`, `%env(boolean:FEATURE)%`, `%env(string:NAME)%`
+  - When the entire value is a single placeholder, typed forms produce native values (number/boolean).
+  - When used inside larger strings (e.g. `"http://%env(API_HOST)%/v1"`), placeholders are interpolated as text.
 - **TypeScript configs**: call `env("DB_HOST")`; the helper is available globally when the module is evaluated
   - For tighter autocomplete you can build a project-local accessor via `createEnvAccessor(["DB_HOST", "DB_PORT"] as const)`
 
@@ -171,9 +174,9 @@ The `env()` helper throws when the variable is missing. Provide a default with `
 `loadConfig` automatically understands `.env` files when the `env` option is provided. The resolver honours the following precedence, mirroring Symfony's Dotenv component:
 
 1. `.env` (or `.env.dist` when `.env` is missing)
-2. `.env.local` (skipped when `APP_ENV === "test"`)
-3. `.env.<APP_ENV>`
-4. `.env.<APP_ENV>.local`
+2. `.env.local` (skipped when `NODE_ENV === "test"`)
+3. `.env.<NODE_ENV>`
+4. `.env.<NODE_ENV>.local`
 
 Local files always win over base files. The loaded keys are registered on the shared `env` accessor so they show up in editor autocomplete once your editor reloads types.
 

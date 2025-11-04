@@ -1,6 +1,6 @@
-import { spawnSync } from "child_process";
-import fs from "fs";
-import path from "path";
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 
 // Hoisted regex & small helpers (avoid recompiles in hot paths)
 const RX_VARNAME_STICKY = /_?[A-Z][A-Z0-9_]*/y; // sticky var name
@@ -58,8 +58,8 @@ export default class Dotenv {
   private commandExpansionEnabled = false;
 
   constructor(
-    private envKey = "APP_ENV",
-    private debugKey = "APP_DEBUG"
+    private envKey = "NODE_ENV",
+    private debugKey = "NODE_DEBUG"
   ) {}
 
   setProdEnvs(prodEnvs: string[]) {
@@ -78,9 +78,9 @@ export default class Dotenv {
   /**
    * Symfony-like semantics:
    * - load .env (or .env.dist if .env missing)
-   * - infer APP_ENV (default 'dev') if missing
+   * - infer NODE_ENV (default 'dev') if missing
    * - load .env.local unless in test env
-   * - skip if APP_ENV == 'local'
+   * - skip if NODE_ENV == 'local'
    * - load .env.$env
    * - load .env.$env.local
    */
@@ -142,7 +142,7 @@ export default class Dotenv {
       this.loadEnv(p, k, defaultEnv, testEnvs, overrideExisting);
     }
 
-    // Compute APP_DEBUG
+    // Compute NODE_DEBUG
     const dk = this.debugKey;
     const currentEnv = process.env[this.envKey] ?? defaultEnv;
     const defaultDebug = !this.prodEnvs.includes(currentEnv);

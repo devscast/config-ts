@@ -1,4 +1,4 @@
-import { createRequire } from "module";
+import { createRequire } from "node:module";
 import fs from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
@@ -93,13 +93,23 @@ export class ConfigParseError extends ConfigError {
 
 export class ConfigValidationError extends ConfigError {
   constructor(readonly issues: z.core.$ZodIssue[]) {
-    super("Configuration validation failed");
+    const formatPath = (path: Array<PropertyKey>) =>
+      path.length ? path.map(seg => (typeof seg === "number" ? `[${seg}]` : String(seg))).join(".") : "<root>";
+
+    const details = issues.map(iss => `${formatPath(iss.path)}: ${iss.message}`).join("\n");
+
+    super(`Configuration validation failed:\n${details}`);
     this.name = "ConfigValidationError";
   }
 }
 
 // Optimized constants / helpers (hoisted to avoid rework on hot paths)
-const ENV_PLACEHOLDER_REGEX = /%env\(([A-Z0-9_]+)\)%/gi;
+// Support optional type prefixes in placeholders: %env(type:VAR)%
+// - type can be one of: string | number | boolean (case-insensitive)
+// - When the entire value is a single placeholder, we can return a non-string (number/boolean)
+// - When embedded inside a larger string, we interpolate as a string
+const ENV_PLACEHOLDER_ANY = /%env\((?:(string|number|boolean):)?([A-Z0-9_]+)\)%/gi;
+const ENV_PLACEHOLDER_FULL = /^%env\((?:(string|number|boolean):)?([A-Z0-9_]+)\)%$/i;
 
 const TS_COMPILER_OPTS: ts.TranspileOptions = {
   compilerOptions: {
@@ -286,12 +296,12 @@ function parseFile(source: FileSource, cwd: string, accessor: EnvAccessor<string
     switch (format) {
       case "json":
         return ensureObject(JSON.parse(text), targetPath);
+      case "ts":
+        return ensureObject(loadTsModule(targetPath, text, accessor), targetPath);
       case "yaml":
         return ensureObject(YAML.parse(text), targetPath);
       case "ini":
         return ensureObject(ini.parse(text), targetPath);
-      case "ts":
-        return ensureObject(loadTsModule(targetPath, text, accessor), targetPath);
       default:
         throw new ConfigParseError(`Unsupported configuration format: ${format}`, targetPath);
     }
@@ -352,7 +362,22 @@ function ensureObject(value: unknown, origin: string): Record<string, unknown> {
 
 function resolvePlaceholders(value: unknown, accessor: EnvAccessor<string>): unknown {
   if (typeof value === "string") {
-    return value.replace(ENV_PLACEHOLDER_REGEX, (_m, name: string) => accessor(name));
+    // If the entire string is exactly one placeholder, allow non-string returns
+    const full = value.match(ENV_PLACEHOLDER_FULL);
+    if (full) {
+      const [, rawType, name] = full as unknown as [string, string | undefined, string];
+      const type = rawType ? rawType.toLowerCase() : undefined;
+      const raw = accessor(name as string);
+      return coerceEnvValue(raw, type);
+    }
+
+    // Otherwise, interpolate placeholders inside the string
+    return value.replace(ENV_PLACEHOLDER_ANY, (_m, rawType: string | undefined, name: string) => {
+      const type = rawType ? rawType.toLowerCase() : undefined;
+      const raw = accessor(name);
+      const coerced = coerceEnvValue(raw, type);
+      return String(coerced);
+    });
   }
   if (Array.isArray(value)) {
     const out = new Array(value.length);
@@ -367,6 +392,27 @@ function resolvePlaceholders(value: unknown, accessor: EnvAccessor<string>): unk
     return result;
   }
   return value;
+}
+
+function coerceEnvValue(raw: string, type?: string): unknown {
+  switch (type) {
+    case undefined:
+    case "string":
+      return raw;
+    case "number": {
+      const num = Number(raw);
+      return num; // May be NaN; let schema validation catch invalid cases
+    }
+    case "boolean": {
+      const norm = raw.trim().toLowerCase();
+      if (norm === "true" || norm === "1" || norm === "yes" || norm === "y" || norm === "on") return true;
+      if (norm === "false" || norm === "0" || norm === "no" || norm === "n" || norm === "off") return false;
+      // Fallback: non-empty strings are truthy, empty is falsey
+      return Boolean(norm);
+    }
+    default:
+      return raw;
+  }
 }
 
 /**

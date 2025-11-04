@@ -231,3 +231,61 @@ describe("loadConfig", () => {
     expect(config.key).toBe("value");
   });
 });
+
+describe("typed %env(...)% placeholders", () => {
+  it("supports number placeholders (native type when standalone, string when embedded)", () => {
+    process.env.PORT = "8080";
+
+    const schema = z.object({
+      port: z.number(),
+      url: z.string(),
+    });
+
+    const { config } = loadConfig({
+      schema,
+      env: false,
+      sources: [{ port: "%env(number:PORT)%", url: "http://localhost:%env(number:PORT)%" }],
+    });
+
+    expect(config.port).toBe(8080);
+    expect(typeof config.port).toBe("number");
+    expect(config.url).toBe("http://localhost:8080");
+  });
+
+  it("supports boolean placeholders (native type)", () => {
+    process.env.FEATURE_ONE = "true";
+    process.env.FEATURE_TWO = "0"; // falsey
+
+    const schema = z.object({
+      featureOne: z.boolean(),
+      featureTwo: z.boolean(),
+    });
+
+    const { config } = loadConfig({
+      schema,
+      env: false,
+      sources: [{ featureOne: "%env(boolean:FEATURE_ONE)%", featureTwo: "%env(boolean:FEATURE_TWO)%" }],
+    });
+
+    expect(config.featureOne).toBe(true);
+    expect(config.featureTwo).toBe(false);
+  });
+
+  it("accepts explicit string type and interpolates inside larger strings", () => {
+    process.env.NAME = "service";
+
+    const schema = z.object({
+      name: z.string(),
+      location: z.string(),
+    });
+
+    const { config } = loadConfig({
+      schema,
+      env: false,
+      sources: [{ name: "%env(string:NAME)%", location: "/srv/%env(string:NAME)%/data" }],
+    });
+
+    expect(config.name).toBe("service");
+    expect(config.location).toBe("/srv/service/data");
+  });
+});

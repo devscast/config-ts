@@ -1,0 +1,9 @@
+{
+  "database": {
+    "host": "localhost",
+    "password": "securepassword",
+    "port": 5432,
+    "username": "admin"
+  },
+  "features": ["analytics", "notifications"]
+}

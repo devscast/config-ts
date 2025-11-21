@@ -1,19 +1,15 @@
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
-import vm from "node:vm";
 
-import ini from "ini";
-import ts from "typescript";
-import YAML from "yaml";
-import { ZodType } from "zod";
-import { z } from "zod/mini";
+import * as ini from "ini";
+import * as YAML from "yaml";
+import * as z from "zod";
 
 import Dotenv, { PathError } from "./dotenv";
-import { createEnvAccessor, env as defaultEnvAccessor, EnvAccessor } from "./env";
+import { EnvAccessor, createEnvAccessor } from "./env";
 
 // Types & Public API
-export type ConfigFormat = "json" | "yaml" | "ini" | "ts";
+export type ConfigFormat = "json" | "yaml" | "ini";
 
 export interface FileSource {
   path: string;
@@ -38,6 +34,21 @@ export interface EnvConfigOptions {
   knownKeys?: readonly string[];
 }
 
+export interface DefineConfigOptions<T extends z.core.$ZodType> {
+  schema: T;
+  sources?: ConfigSource | ConfigSource[];
+  defaults?: z.input<T>;
+  cwd?: string;
+  env?: boolean | EnvConfigOptions;
+}
+
+export type LoadConfigOptions<T extends z.core.$ZodType> = DefineConfigOptions<T>;
+
+export interface ConfigResult<T> {
+  config: T;
+  env: EnvAccessor<string>;
+}
+
 interface NormalizedEnvOptions {
   path: string;
   envKey: string;
@@ -49,19 +60,6 @@ interface NormalizedEnvOptions {
   prodEnvs?: string[];
   environment?: string;
   knownKeys?: readonly string[];
-}
-
-export interface LoadConfigOptions<T extends ZodType> {
-  schema: T;
-  sources?: ConfigSource | ConfigSource[];
-  defaults?: z.input<T>;
-  cwd?: string;
-  env?: boolean | EnvConfigOptions;
-}
-
-export interface ConfigResult<T> {
-  config: T;
-  env: EnvAccessor<string>;
 }
 
 // Errors
@@ -83,7 +81,7 @@ export class ConfigParseError extends ConfigError {
   constructor(
     message: string,
     readonly filepath: string,
-    readonly cause?: unknown
+    readonly cause?: unknown,
   ) {
     super(`${message} (${filepath})`);
     this.name = "ConfigParseError";
@@ -91,13 +89,9 @@ export class ConfigParseError extends ConfigError {
   }
 }
 
-export class ConfigValidationError extends ConfigError {
-  constructor(readonly issues: z.core.$ZodIssue[]) {
-    const formatPath = (path: Array<PropertyKey>) =>
-      path.length ? path.map(seg => (typeof seg === "number" ? `[${seg}]` : String(seg))).join(".") : "<root>";
-
-    const details = issues.map(iss => `${formatPath(iss.path)}: ${iss.message}`).join("\n");
-
+export class ConfigValidationError<T extends z.ZodType> extends ConfigError {
+  constructor(readonly issues: z.ZodError<z.core.output<T>>) {
+    const details = z.prettifyError(issues);
     super(`Configuration validation failed:\n${details}`);
     this.name = "ConfigValidationError";
   }
@@ -111,22 +105,11 @@ export class ConfigValidationError extends ConfigError {
 const ENV_PLACEHOLDER_ANY = /%env\((?:(string|number|boolean):)?([A-Z0-9_]+)\)%/gi;
 const ENV_PLACEHOLDER_FULL = /^%env\((?:(string|number|boolean):)?([A-Z0-9_]+)\)%$/i;
 
-const TS_COMPILER_OPTS: ts.TranspileOptions = {
-  compilerOptions: {
-    module: ts.ModuleKind.CommonJS,
-    esModuleInterop: true,
-    target: ts.ScriptTarget.ES2020,
-  },
-  fileName: "",
-  reportDiagnostics: false,
-};
-
 const EXT_TO_FORMAT: Record<string, ConfigFormat | undefined> = {
+  ".ini": "ini",
   ".json": "json",
   ".yaml": "yaml",
   ".yml": "yaml",
-  ".ini": "ini",
-  ".ts": "ts",
 };
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -159,7 +142,9 @@ function fastSplitCommaSet(raw: string | undefined): string[] {
 }
 
 // Public entry
-export function loadConfig<T extends ZodType>(options: LoadConfigOptions<T>): ConfigResult<z.infer<T>> {
+export function defineConfig<T extends z.ZodType>(
+  options: DefineConfigOptions<T>,
+): ConfigResult<z.infer<T>> {
   const schema = options.schema;
   if (!schema) throw new ConfigError("A Zod schema is required to load configuration.");
 
@@ -172,8 +157,6 @@ export function loadConfig<T extends ZodType>(options: LoadConfigOptions<T>): Co
   if (envOptions) {
     loadEnvFiles(envOptions, cwd, envAccessor);
   }
-  // keep the default exported accessor in sync
-  defaultEnvAccessor.register(...envAccessor.keys());
 
   const sources = normalizeSources(options.sources);
 
@@ -184,14 +167,14 @@ export function loadConfig<T extends ZodType>(options: LoadConfigOptions<T>): Co
   let merged: unknown = options.defaults ? cloneValue(options.defaults) : {};
 
   for (const source of sources) {
-    const parsed = resolveSource(source, cwd, envAccessor);
+    const parsed = resolveSource(source, cwd);
     if (parsed) merged = mergeValues(merged, parsed);
   }
 
   const resolved = resolvePlaceholders(merged, envAccessor);
   const validation = schema.safeParse(resolved);
   if (!validation.success) {
-    throw new ConfigValidationError(validation.error.issues);
+    throw new ConfigValidationError(validation.error);
   }
 
   return { config: validation.data, env: envAccessor };
@@ -206,12 +189,12 @@ function normalizeEnvOptions(input?: boolean | EnvConfigOptions): NormalizedEnvO
   if (input === false) return null;
 
   const defaults: NormalizedEnvOptions = {
-    path: ".env",
-    envKey: "APP_ENV",
     defaultEnv: "dev",
-    testEnvs: ["test"],
-    overrideExisting: false,
+    envKey: "NODE_ENV",
     optional: true,
+    overrideExisting: false,
+    path: ".env",
+    testEnvs: ["test"],
   };
 
   if (input === undefined || input === true) return defaults;
@@ -219,16 +202,16 @@ function normalizeEnvOptions(input?: boolean | EnvConfigOptions): NormalizedEnvO
 
   return {
     ...defaults,
-    path: input.path ?? defaults.path,
-    envKey: input.envKey ?? defaults.envKey,
     debugKey: input.debugKey,
     defaultEnv: input.defaultEnv ?? defaults.defaultEnv,
-    testEnvs: input.testEnvs ?? defaults.testEnvs,
-    overrideExisting: input.overrideExisting ?? defaults.overrideExisting,
-    optional: input.optional ?? defaults.optional,
-    prodEnvs: input.prodEnvs,
     environment: input.environment,
+    envKey: input.envKey ?? defaults.envKey,
     knownKeys: input.knownKeys,
+    optional: input.optional ?? defaults.optional,
+    overrideExisting: input.overrideExisting ?? defaults.overrideExisting,
+    path: input.path ?? defaults.path,
+    prodEnvs: input.prodEnvs,
+    testEnvs: input.testEnvs ?? defaults.testEnvs,
   };
 }
 
@@ -243,7 +226,13 @@ function loadEnvFiles(options: NormalizedEnvOptions, cwd: string, accessor: EnvA
   }
 
   try {
-    dotenv.loadEnv(basePath, options.envKey, options.defaultEnv, options.testEnvs, options.overrideExisting);
+    dotenv.loadEnv(
+      basePath,
+      options.envKey,
+      options.defaultEnv,
+      options.testEnvs,
+      options.overrideExisting,
+    );
   } catch (error) {
     if (!(options.optional && error instanceof PathError)) {
       throw error;
@@ -260,21 +249,17 @@ function loadEnvFiles(options: NormalizedEnvOptions, cwd: string, accessor: EnvA
 
 function extractLoadedEnvKeys(): string[] {
   // Single env variable used as sentinel by our Dotenv
-  const raw = process.env["NODE_DOTENV_VARS"];
+  const raw = process.env.NODE_DOTENV_VARS;
   return fastSplitCommaSet(raw);
 }
 
 // Source resolution & parsing
-function resolveSource(
-  source: ConfigSource,
-  cwd: string,
-  accessor: EnvAccessor<string>
-): Record<string, unknown> | null {
+function resolveSource(source: ConfigSource, cwd: string): Record<string, unknown> | null {
   if (typeof source === "string") {
-    return parseFile({ path: source }, cwd, accessor);
+    return parseFile({ path: source }, cwd);
   }
   if (isFileSource(source)) {
-    return parseFile(source, cwd, accessor);
+    return parseFile(source, cwd);
   }
   if (!isPlainObject(source)) {
     throw new ConfigError("Inline configuration sources must be plain objects.");
@@ -282,7 +267,7 @@ function resolveSource(
   return cloneValue(source);
 }
 
-function parseFile(source: FileSource, cwd: string, accessor: EnvAccessor<string>): Record<string, unknown> | null {
+function parseFile(source: FileSource, cwd: string): Record<string, unknown> | null {
   const targetPath = path.isAbsolute(source.path) ? source.path : path.resolve(cwd, source.path);
   const format = source.format ?? inferFormat(targetPath);
 
@@ -296,8 +281,6 @@ function parseFile(source: FileSource, cwd: string, accessor: EnvAccessor<string
     switch (format) {
       case "json":
         return ensureObject(JSON.parse(text), targetPath);
-      case "ts":
-        return ensureObject(loadTsModule(targetPath, text, accessor), targetPath);
       case "yaml":
         return ensureObject(YAML.parse(text), targetPath);
       case "ini":
@@ -316,39 +299,10 @@ function inferFormat(filepath: string): ConfigFormat {
   if (!ext) {
     throw new ConfigParseError(
       `Unable to infer configuration format for extension "${path.extname(filepath)}"`,
-      filepath
+      filepath,
     );
   }
   return ext;
-}
-
-// TypeScript module loading (no disk re-read, uses provided source)
-function loadTsModule(filepath: string, code: string, accessor: EnvAccessor<string>): unknown {
-  const opts = { ...TS_COMPILER_OPTS, fileName: filepath };
-  const transpiled = ts.transpileModule(code, opts);
-
-  const requireFromFile = createRequire(filepath);
-  const module = { exports: {} as any };
-  const context = vm.createContext({
-    module,
-    exports: module.exports,
-    require: requireFromFile,
-    __dirname: path.dirname(filepath),
-    __filename: filepath,
-    process,
-    console,
-    env: accessor,
-  });
-
-  new vm.Script(transpiled.outputText, { filename: filepath }).runInContext(context);
-
-  const rawExports = module.exports;
-  const exported =
-    rawExports && typeof rawExports === "object" && "default" in rawExports
-      ? (rawExports as { default: unknown }).default
-      : rawExports;
-
-  return typeof exported === "function" ? exported({ env: accessor }) : exported;
 }
 
 // Value shaping
@@ -405,8 +359,10 @@ function coerceEnvValue(raw: string, type?: string): unknown {
     }
     case "boolean": {
       const norm = raw.trim().toLowerCase();
-      if (norm === "true" || norm === "1" || norm === "yes" || norm === "y" || norm === "on") return true;
-      if (norm === "false" || norm === "0" || norm === "no" || norm === "n" || norm === "off") return false;
+      if (norm === "true" || norm === "1" || norm === "yes" || norm === "y" || norm === "on")
+        return true;
+      if (norm === "false" || norm === "0" || norm === "no" || norm === "n" || norm === "off")
+        return false;
       // Fallback: non-empty strings are truthy, empty is falsey
       return Boolean(norm);
     }
@@ -415,12 +371,6 @@ function coerceEnvValue(raw: string, type?: string): unknown {
   }
 }
 
-/**
- * mergeValues:
- * - arrays: replace with next (clone)
- * - objects: deep-merge (clone branches)
- * - primitives: override with next
- */
 function mergeValues(base: unknown, next: unknown): unknown {
   if (next === undefined) return cloneValue(base);
   if (base === undefined) return cloneValue(next);
@@ -464,5 +414,10 @@ function cloneValue<T>(value: T): T {
 
 // Narrowing helpers
 function isFileSource(value: ConfigSource): value is FileSource {
-  return typeof value === "object" && value !== null && "path" in value && typeof (value as any).path === "string";
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "path" in value &&
+    typeof (value as any).path === "string"
+  );
 }

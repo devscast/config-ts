@@ -1,6 +1,6 @@
 {
   "include": ["./src"],
-  "exclude": ["./tests"],
+  "exclude": ["__tests__"],
   "compilerOptions": {
     "module": "nodenext",
     "target": "esnext",
@@ -15,8 +15,5 @@
     "noEmit": true,
     "outDir": "dist",
     "rootDir": "src",
-    "paths": {
-      "@/*": ["./src/*"]
-    },
   }
 }

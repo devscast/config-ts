@@ -11,11 +11,11 @@
 
 `@devscast/config` provides a batteries-included configuration loader for Node.js projects. It lets you:
 
-- Load configuration from JSON, YAML, INI, or native TypeScript modules
+- Load configuration from JSON, YAML, INI, or inline objects defined in code
 - Reference environment variables in text files with the `%env(FOO)%` syntax
 - Bootstrap environment values from `.env` files (including `.env.local`, `.env.<env>`, `.env.<env>.local`)
 - Validate the resulting configuration with a [Zod v4](https://zod.dev) schema before your app starts
-- Consume the same `env()` helper inside TypeScript configuration files for typed access to `process.env`
+- Use the typed `env()` helper throughout your app for safe access to `process.env`
 
 ## Installation
 
@@ -36,7 +36,7 @@ npm install @devscast/config zod
 ```ts
 import path from "node:path";
 import { z } from "zod/mini";
-import { loadConfig } from "@devscast/config";
+import { defineConfig } from "@devscast/config";
 
 const schema = z.object({
   database: z.object({
@@ -48,7 +48,7 @@ const schema = z.object({
   featureFlags: z.array(z.string()).default([]),
 });
 
-const { config, env } = loadConfig({
+const { config, env } = defineConfig({
   schema,
   cwd: process.cwd(),
   env: { path: path.join(process.cwd(), ".env") },
@@ -68,9 +68,9 @@ console.log(config.database.host);
 
 ```ts
 import path from "node:path";
-import { loadConfig } from "@devscast/config";
+import { defineConfig } from "@devscast/config";
 
-const { config, env } = loadConfig({
+const { config, env } = defineConfig({
   schema,
   env: true,
   sources: [
@@ -88,9 +88,9 @@ const { config, env } = loadConfig({
 #### Typed environment accessor for reusable helpers
 
 ```ts
-import { loadConfig } from "@devscast/config";
+import { defineConfig } from "@devscast/config";
 
-const { config, env } = loadConfig({
+const { config, env } = defineConfig({
   schema,
   env: {
     path: ".env",
@@ -127,36 +127,48 @@ const config = schema.parse({
 });
 ```
 
-- `createEnvAccessor` gives you the same typed helper without invoking `loadConfig`, ideal for lightweight scripts.
+- `createEnvAccessor` gives you the same typed helper without invoking `defineConfig`, ideal for lightweight scripts.
 - You can still validate the derived values with Zod (or any other validator) before using them.
 
-#### Executable TypeScript configuration modules
+#### Inline configuration objects (no compiled files)
 
 ```ts
-// config/services.ts
-import type { EnvAccessor } from "@devscast/config";
+import { z } from "zod/mini";
+import { defineConfig } from "@devscast/config";
 
-export default ({ env }: { env: EnvAccessor<string> }) => ({
-  redis: {
-    host: env("REDIS_HOST"),
-    port: Number(env("REDIS_PORT", { default: "6379" })),
+const schema = z.object({
+  database: z.object({
+    host: z.string(),
+    port: z.number(),
+  }),
+  featureFlags: z.preprocess(
+    value => {
+      if (typeof value === "string") {
+        return value
+          .split(",")
+          .map(flag => flag.trim())
+          .filter(Boolean);
+      }
+      return value;
+    },
+    z.array(z.string())
+  ),
+});
+
+const { config } = defineConfig({
+  schema,
+  env: { path: ".env" },
+  sources: {
+    database: { host: "%env(DB_HOST)%", port: "%env(number:DB_PORT)%" },
+    featureFlags: "%env(FEATURE_FLAGS)%",
   },
 });
 
-// loader
-import path from "node:path";
-import { loadConfig } from "@devscast/config";
-
-const { config } = loadConfig({
-  schema,
-  sources: [
-    { path: path.join("config", "services.ts"), format: "ts" },
-  ],
-});
+console.log(config.database);
 ```
 
-- TS sources run inside a sandbox with the same `env` helper, so you can compute complex structures at load time.
-- Returning a function lets you access the accessor argument explicitly; you can also export plain objects if no logic is needed.
+- Inline objects remove the need for TypeScript config files while still allowing env interpolation.
+- Typed placeholders resolve after `.env` files load; use Zod preprocessors for shapes like comma-delimited lists.
 
 ### Referencing environment variables
 
@@ -164,14 +176,13 @@ const { config } = loadConfig({
 - **Typed placeholders**: `%env(number:PORT)%`, `%env(boolean:FEATURE)%`, `%env(string:NAME)%`
   - When the entire value is a single placeholder, typed forms produce native values (number/boolean).
   - When used inside larger strings (e.g. `"http://%env(API_HOST)%/v1"`), placeholders are interpolated as text.
-- **TypeScript configs**: call `env("DB_HOST")`; the helper is available globally when the module is evaluated
-  - For tighter autocomplete you can build a project-local accessor via `createEnvAccessor(["DB_HOST", "DB_PORT"] as const)`
+- **Inline objects**: placeholders work the same way; combine them with Zod preprocessors for complex shapes (arrays, URLs, etc.).
 
 The `env()` helper throws when the variable is missing. Provide a default with `env("PORT", { default: "3000" })` or switch to `env.optional("PORT")`.
 
 ### Dotenv loading
 
-`loadConfig` automatically understands `.env` files when the `env` option is provided. The resolver honours the following precedence, mirroring Symfony's Dotenv component:
+`defineConfig` automatically understands `.env` files when the `env` option is provided. The resolver honours the following precedence, mirroring Symfony's Dotenv component:
 
 1. `.env` (or `.env.dist` when `.env` is missing)
 2. `.env.local` (skipped when `NODE_ENV === "test"`)

@@ -1,25 +1,15 @@
 # @devscast/config
 
+## 1.1.0
+
+- enhance: ConfigValidationError now includes detailed validation issues
+- fix: correct typing in defineConfig function
+- drop support of ts config files
+- drop support of csj config files
+
 ## 1.0.3
 
-### Patch Changes
-
 - support typed prefix in environment variables
-
-## 1.0.2
-
-### Patch Changes
-
 - minify production dist
-
-## 1.0.1
-
-### Patch Changes
-
 - remove command expensions tests
-
-## 1.0.0
-
-### Major Changes
-
 - Initial Release

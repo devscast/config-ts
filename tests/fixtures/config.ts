@@ -1,9 +1,0 @@
-export default {
-  database: {
-    host: "localhost",
-    port: 5432,
-    username: "admin",
-    password: "securepassword"
-  },
-  features: ["analytics", "notifications"]
-}

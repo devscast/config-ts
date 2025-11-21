@@ -1,15 +1,14 @@
 export {
-  loadConfig,
-  type ConfigSource,
-  type LoadConfigOptions,
-  type ConfigResult,
-  type ConfigFormat,
   ConfigError,
   ConfigFileNotFoundError,
+  type ConfigFormat,
   ConfigParseError,
+  type ConfigResult,
+  type ConfigSource,
   ConfigValidationError,
-} from "@/config";
-
-export { env, createEnvAccessor, type EnvAccessor, type EnvLookupOptions } from "@/env";
-
-export { default as Dotenv, FormatError, PathError } from "@/dotenv";
+  type DefineConfigOptions,
+  type LoadConfigOptions,
+  defineConfig,
+} from "./config";
+export { FormatError, PathError, default as Dotenv } from "./dotenv";
+export { type EnvAccessor, type EnvLookupOptions, createEnvAccessor, env } from "./env";

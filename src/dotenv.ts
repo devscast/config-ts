@@ -1,6 +1,5 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import path from "node:path";
 
 // Hoisted regex & small helpers (avoid recompiles in hot paths)
 const RX_VARNAME_STICKY = /_?[A-Z][A-Z0-9_]*/y; // sticky var name
@@ -26,7 +25,7 @@ export class FormatError extends Error {
     message: string,
     readonly filepath: string,
     readonly line: number,
-    readonly column: number
+    readonly column: number,
   ) {
     super(`${message} at ${filepath}:${line}:${column}`);
     this.name = "FormatError";
@@ -59,7 +58,7 @@ export default class Dotenv {
 
   constructor(
     private envKey = "NODE_ENV",
-    private debugKey = "NODE_DEBUG"
+    private debugKey = "NODE_DEBUG",
   ) {}
 
   setProdEnvs(prodEnvs: string[]) {
@@ -89,7 +88,7 @@ export default class Dotenv {
     envKey: string | null = null,
     defaultEnv = "dev",
     testEnvs: string[] = ["test"],
-    overrideExisting = false
+    overrideExisting = false,
   ) {
     this.populatePath(p);
 
@@ -127,24 +126,12 @@ export default class Dotenv {
   }
 
   bootEnv(p: string, defaultEnv = "dev", testEnvs: string[] = ["test"], overrideExisting = false) {
-    const jsLocal = `${p}.local.cjs`;
     const k = this.envKey;
-    let loaded: StringMap | null = null;
-
-    // Try CJS object { KEY: "VALUE", ... }
-    const localObj = tryRequireObject(jsLocal);
-    if (localObj) loaded = { ...localObj };
-
-    if (loaded && (overrideExisting || !loaded[k] || (process.env[k] ?? loaded[k]) === loaded[k])) {
-      this.populatePath(p);
-      this.populate(loaded, overrideExisting);
-    } else {
-      this.loadEnv(p, k, defaultEnv, testEnvs, overrideExisting);
-    }
+    this.loadEnv(p, k, defaultEnv, testEnvs, overrideExisting);
 
     // Compute NODE_DEBUG
     const dk = this.debugKey;
-    const currentEnv = process.env[this.envKey] ?? defaultEnv;
+    const currentEnv = process.env[k] ?? defaultEnv;
     const defaultDebug = !this.prodEnvs.includes(currentEnv);
     const debugRaw = process.env[dk];
     process.env[dk] = this.castBool(debugRaw ?? defaultDebug) ? "1" : "0";
@@ -155,8 +142,8 @@ export default class Dotenv {
     const loadedVars = new Set(
       (process.env[SENTINEL_VARS] ?? "")
         .split(",")
-        .map(s => s.trim())
-        .filter(Boolean)
+        .map((s) => s.trim())
+        .filter(Boolean),
     );
 
     for (const [name, value] of Object.entries(values)) {
@@ -236,9 +223,12 @@ export default class Dotenv {
       throw this.createFormatError("Missing = in the environment variable declaration");
     }
     if (ch === " " || ch === "\t") {
-      throw this.createFormatError("Whitespace characters are not supported after the variable name");
+      throw this.createFormatError(
+        "Whitespace characters are not supported after the variable name",
+      );
     }
-    if (ch !== "=") throw this.createFormatError("Missing = in the environment variable declaration");
+    if (ch !== "=")
+      throw this.createFormatError("Missing = in the environment variable declaration");
     this.cursor++;
     return varname;
   }
@@ -260,8 +250,8 @@ export default class Dotenv {
     const loadedVars = new Set(
       (process.env[SENTINEL_VARS] ?? "")
         .split(",")
-        .map(s => s.trim())
-        .filter(Boolean)
+        .map((s) => s.trim())
+        .filter(Boolean),
     );
 
     const chunks: string[] = [];
@@ -283,16 +273,19 @@ export default class Dotenv {
       } else if (ch === '"') {
         // double-quoted: escapes + variable/command expansion
         this.cursor++;
-        if (this.cursor === this.end_) throw this.createFormatError("Missing quote to end the value");
+        if (this.cursor === this.end_)
+          throw this.createFormatError("Missing quote to end the value");
 
         const start = this.cursor;
         const inner: string[] = [];
         while (true) {
-          if (this.cursor === this.end_) throw this.createFormatError("Missing quote to end the value");
+          if (this.cursor === this.end_)
+            throw this.createFormatError("Missing quote to end the value");
           if (this.data_[this.cursor] === '"') {
             // ensure not escaped by odd count of backslashes
             let backslashCount = 0;
-            for (let i = this.cursor - 1; i >= start && this.data_[i] === "\\"; i--) backslashCount++;
+            for (let i = this.cursor - 1; i >= start && this.data_[i] === "\\"; i--)
+              backslashCount++;
             if (backslashCount % 2 === 0) break;
           }
           inner.push(this.data_[this.cursor]!);
@@ -300,7 +293,11 @@ export default class Dotenv {
         }
         this.cursor++; // consume closing "
 
-        let value = inner.join("").replace(RX_DOUBLE_QUOTE_ESCAPES, '"').replace(/\\r/g, "\r").replace(/\\n/g, "\n");
+        let value = inner
+          .join("")
+          .replace(RX_DOUBLE_QUOTE_ESCAPES, '"')
+          .replace(/\\r/g, "\r")
+          .replace(/\\n/g, "\n");
         value = this.resolveCommands(value, loadedVars);
         value = this.resolveVariables(value, loadedVars).replace(/\\\\/g, "\\");
         chunks.push(value);
@@ -324,7 +321,7 @@ export default class Dotenv {
 
           if (this.data_[this.cursor] === "$" && this.data_[this.cursor + 1] === "(") {
             this.cursor++;
-            bare.push("(" + this.lexNestedExpression() + ")");
+            bare.push(`(${this.lexNestedExpression()})`);
             this.cursor++;
             continue;
           }
@@ -333,7 +330,7 @@ export default class Dotenv {
           this.cursor++;
         }
 
-        let value = bare.join("").replace(RX_TRAILING_WS, "");
+        const value = bare.join("").replace(RX_TRAILING_WS, "");
         let resolved = this.resolveCommands(value, loadedVars);
         resolved = this.resolveVariables(resolved, loadedVars).replace(/\\\\/g, "\\");
         if (resolved === value && /\s/.test(value)) {
@@ -425,7 +422,7 @@ export default class Dotenv {
       const backslashes = countBackslashesLocal(value, start);
       if (backslashes % 2 === 1) {
         // keep literal "$(" and drop one backslash
-        out += value.slice(cursor, Math.max(cursor, start - 1)) + "$(";
+        out += `${value.slice(cursor, Math.max(cursor, start - 1))}$(`;
         cursor = start + 2;
         continue;
       }
@@ -487,9 +484,9 @@ export default class Dotenv {
 
     // run content directly; no echo trampoline
     const out = spawnSync(content, {
+      encoding: "utf8",
       env: childEnv,
       shell: "/bin/sh",
-      encoding: "utf8",
     });
 
     if (out.error || out.status !== 0) {
@@ -535,7 +532,7 @@ export default class Dotenv {
           const bad = Dotenv.findInvalidDefaultChar(defaultBody);
           if (bad) {
             throw this.createFormatError(
-              `Unsupported character "${bad}" found in the default value of variable "$${name}".`
+              `Unsupported character "${bad}" found in the default value of variable "$${name}".`,
             );
           }
           const dval = defaultBody;
@@ -550,7 +547,7 @@ export default class Dotenv {
         }
 
         return (backslashes ?? "") + val;
-      }
+      },
     );
   }
 
@@ -591,7 +588,12 @@ export default class Dotenv {
       if (buf === null) throw new PathError(p);
       // directory reads throw, so reaching here means it's a regular file-like
       if (buf.length >= 3 && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) {
-        throw new FormatError("Loading files starting with a byte-order-mark (BOM) is not supported.", p, 1, 0);
+        throw new FormatError(
+          "Loading files starting with a byte-order-mark (BOM) is not supported.",
+          p,
+          1,
+          0,
+        );
       }
       const parsed = this.parse(buf.toString("utf8"), p);
       this.populate(parsed, overrideExisting);
@@ -600,7 +602,12 @@ export default class Dotenv {
 
   private loadBuffer(buf: Buffer, filepath: string, overrideExisting: boolean) {
     if (buf.length >= 3 && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) {
-      throw new FormatError("Loading files starting with a byte-order-mark (BOM) is not supported.", filepath, 1, 0);
+      throw new FormatError(
+        "Loading files starting with a byte-order-mark (BOM) is not supported.",
+        filepath,
+        1,
+        0,
+      );
     }
     const parsed = this.parse(buf.toString("utf8"), filepath);
     this.populate(parsed, overrideExisting);
@@ -626,17 +633,6 @@ export default class Dotenv {
 function tryReadFile(p: string): Buffer | null {
   try {
     return fs.readFileSync(p);
-  } catch {
-    return null;
-  }
-}
-
-function tryRequireObject(p: string): unknown | null {
-  try {
-    if (!fs.existsSync(p)) return null;
-
-    const mod = require(path.resolve(p));
-    return mod && typeof mod === "object" ? mod : null;
   } catch {
     return null;
   }

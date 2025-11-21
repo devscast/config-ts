@@ -11,7 +11,9 @@ export interface EnvAccessor<K extends string = string> {
 }
 
 export function createEnvAccessor(): EnvAccessor<string>;
-export function createEnvAccessor<const Keys extends readonly string[]>(knownKeys: Keys): EnvAccessor<Keys[number]>;
+export function createEnvAccessor<const Keys extends readonly string[]>(
+  knownKeys: Keys,
+): EnvAccessor<Keys[number]>;
 export function createEnvAccessor(knownKeys?: readonly string[]): EnvAccessor<string> {
   const registered = new Set<string>(knownKeys ?? []);
 
@@ -36,7 +38,7 @@ export function createEnvAccessor(knownKeys?: readonly string[]): EnvAccessor<st
 
   read.has = (name: string) => {
     if (registered.has(name as string)) return true;
-    if (Object.prototype.hasOwnProperty.call(process.env, name)) return true;
+    if (Object.hasOwn(process.env, name)) return true;
     return false;
   };
 

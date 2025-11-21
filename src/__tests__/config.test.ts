@@ -1,12 +1,14 @@
-import path from "path";
+import path from "node:path";
+
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { z } from "zod/mini";
+import * as z from "zod";
 
 import {
-  loadConfig,
   ConfigFileNotFoundError,
+  ConfigParseError,
   ConfigValidationError,
-} from "@/config";
+  defineConfig,
+} from "../config";
 
 const fixturesDir = path.resolve(__dirname, "fixtures");
 const envDir = path.join(fixturesDir, "env");
@@ -34,22 +36,22 @@ afterEach(() => {
   delete process.env.NODE_DOTENV_VARS;
 });
 
-describe("loadConfig", () => {
+describe("defineConfig", () => {
   it("loads configuration from JSON", () => {
     const schema = z.object({
       database: z.object({
         host: z.string(),
+        password: z.string(),
         port: z.number(),
         username: z.string(),
-        password: z.string(),
       }),
       features: z.array(z.string()),
     });
 
-    const { config } = loadConfig({
+    const { config } = defineConfig({
+      env: false,
       schema,
       sources: path.join(fixturesDir, "config.json"),
-      env: false,
     });
 
     expect(config.database.host).toBe("localhost");
@@ -61,24 +63,24 @@ describe("loadConfig", () => {
     const schema = z.object({
       database: z.object({
         host: z.string(),
+        password: z.string(),
         port: z.number(),
         username: z.string(),
-        password: z.string(),
       }),
       features: z.array(z.string()),
     });
 
-    const { config } = loadConfig({
+    const { config } = defineConfig({
+      env: false,
       schema,
       sources: path.join(fixturesDir, "config.yaml"),
-      env: false,
     });
 
     expect(config.database).toMatchObject({
       host: "localhost",
+      password: "securepassword",
       port: 5432,
       username: "admin",
-      password: "securepassword",
     });
     expect(config.features).toEqual(["analytics", "notifications"]);
   });
@@ -87,19 +89,19 @@ describe("loadConfig", () => {
     const schema = z.object({
       database: z.object({
         host: z.string(),
+        password: z.string(),
         port: z.coerce.number(),
         username: z.string(),
-        password: z.string(),
       }),
       features: z.object({
         items: z.array(z.string()),
       }),
     });
 
-    const { config } = loadConfig({
+    const { config } = defineConfig({
+      env: false,
       schema,
       sources: path.join(fixturesDir, "config.ini"),
-      env: false,
     });
 
     expect(config.database.port).toBe(5432);
@@ -110,25 +112,25 @@ describe("loadConfig", () => {
     const schema = z.object({
       database: z.object({
         host: z.string(),
+        password: z.string(),
         port: z.number(),
         username: z.string(),
-        password: z.string(),
       }),
       features: z.array(z.string()),
     });
 
-    const { config } = loadConfig({
-      schema,
+    const { config } = defineConfig({
       defaults: {
-        database: { host: "default", port: 1000, username: "default", password: "default" },
+        database: { host: "default", password: "default", port: 1000, username: "default" },
         features: ["defaults"],
       },
+      env: false,
+      schema,
       sources: [
         path.join(fixturesDir, "config.json"),
         path.join(fixturesDir, "config.yaml"),
         { database: { password: "overridden" } },
       ],
-      env: false,
     });
 
     expect(config.database.password).toBe("overridden");
@@ -140,22 +142,23 @@ describe("loadConfig", () => {
     const schema = z.object({
       database: z.object({
         host: z.string(),
+        password: z.string(),
         port: z.number(),
         username: z.string(),
-        password: z.string(),
       }),
       services: z.object({
         url: z.string(),
       }),
     });
 
-    const { config } = loadConfig({
+    const { config } = defineConfig({
+      env: {
+        defaultEnv: "dev",
+        environment: "prod",
+        path: path.join(envDir, ".env"),
+      },
       schema,
       sources: path.join(fixturesDir, "config.env.yaml"),
-      env: {
-        path: path.join(envDir, ".env"),
-        defaultEnv: "dev",
-      },
     });
 
     expect(config.database.host).toBe("from-env-prod-local");
@@ -164,27 +167,45 @@ describe("loadConfig", () => {
     expect(config.services.url).toBe("https://prod-local-api.internal/v1");
   });
 
-  it("loads native TypeScript configuration", () => {
+  it("supports inline configuration objects after loading env files", () => {
     const schema = z.object({
       database: z.object({
         host: z.string(),
         port: z.number(),
       }),
-      featureFlags: z.array(z.string()),
+      featureFlags: z.string(),
     });
 
-    const { config } = loadConfig({
-      schema,
-      sources: path.join(fixturesDir, "config.env.ts"),
+    const { config } = defineConfig({
       env: {
-        path: path.join(envDir, ".env"),
         defaultEnv: "dev",
+        environment: "prod",
+        path: path.join(envDir, ".env"),
+      },
+      schema,
+      sources: {
+        database: { host: "%env(DB_HOST)%", port: "%env(number:DB_PORT)%" },
+        featureFlags: "%env(FEATURE_FLAGS)%",
       },
     });
 
     expect(config.database.host).toBe("from-env-prod-local");
     expect(config.database.port).toBe(7777);
-    expect(config.featureFlags).toEqual(["one", "two", "local"]);
+    expect(config.featureFlags).toBe("one,two,local");
+  });
+
+  it("rejects TypeScript configuration files", () => {
+    const schema = z.object({
+      value: z.optional(z.string()),
+    });
+
+    expect(() =>
+      defineConfig({
+        env: false,
+        schema,
+        sources: path.join(fixturesDir, "config.ts"),
+      }),
+    ).toThrow(ConfigParseError);
   });
 
   it("throws validation error when schema does not match", () => {
@@ -195,11 +216,11 @@ describe("loadConfig", () => {
     });
 
     expect(() =>
-      loadConfig({
+      defineConfig({
+        env: false,
         schema,
         sources: { feature: "flag" } as unknown as Record<string, unknown>,
-        env: false,
-      })
+      }),
     ).toThrow(ConfigValidationError);
   });
 
@@ -207,11 +228,11 @@ describe("loadConfig", () => {
     const schema = z.object({ ok: z.optional(z.boolean()) });
 
     expect(() =>
-      loadConfig({
+      defineConfig({
+        env: false,
         schema,
         sources: { path: path.join(fixturesDir, "missing.json") },
-        env: false,
-      })
+      }),
     ).toThrow(ConfigFileNotFoundError);
   });
 
@@ -219,11 +240,11 @@ describe("loadConfig", () => {
     const schema = z.object({ key: z.string() });
     process.env.KEY = "value";
 
-    const { config } = loadConfig({
-      schema,
+    const { config } = defineConfig({
       defaults: { key: "fallback" },
+      schema,
       sources: [
-        { path: path.join(fixturesDir, "missing.json"), optional: true },
+        { optional: true, path: path.join(fixturesDir, "missing.json") },
         { key: "%env(KEY)%" },
       ],
     });
@@ -241,9 +262,9 @@ describe("typed %env(...)% placeholders", () => {
       url: z.string(),
     });
 
-    const { config } = loadConfig({
-      schema,
+    const { config } = defineConfig({
       env: false,
+      schema,
       sources: [{ port: "%env(number:PORT)%", url: "http://localhost:%env(number:PORT)%" }],
     });
 
@@ -261,10 +282,12 @@ describe("typed %env(...)% placeholders", () => {
       featureTwo: z.boolean(),
     });
 
-    const { config } = loadConfig({
-      schema,
+    const { config } = defineConfig({
       env: false,
-      sources: [{ featureOne: "%env(boolean:FEATURE_ONE)%", featureTwo: "%env(boolean:FEATURE_TWO)%" }],
+      schema,
+      sources: [
+        { featureOne: "%env(boolean:FEATURE_ONE)%", featureTwo: "%env(boolean:FEATURE_TWO)%" },
+      ],
     });
 
     expect(config.featureOne).toBe(true);
@@ -275,14 +298,14 @@ describe("typed %env(...)% placeholders", () => {
     process.env.NAME = "service";
 
     const schema = z.object({
-      name: z.string(),
       location: z.string(),
+      name: z.string(),
     });
 
-    const { config } = loadConfig({
-      schema,
+    const { config } = defineConfig({
       env: false,
-      sources: [{ name: "%env(string:NAME)%", location: "/srv/%env(string:NAME)%/data" }],
+      schema,
+      sources: [{ location: "/srv/%env(string:NAME)%/data", name: "%env(string:NAME)%" }],
     });
 
     expect(config.name).toBe("service");
